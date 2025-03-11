@@ -1,4 +1,5 @@
 import pandas as pd
+import plotly
 
 dfs = pd.read_csv("data-static.csv", names = ["ts", "gx", "gy", "gz", "ax", "ay", "az"])
 dfm = pd.read_csv("data-move.csv", names = ["ts", "gx", "gy", "gz", "ax", "ay", "az"])
@@ -25,3 +26,9 @@ for name in names:
     low, high = ranges[name]
     nf = dfm[(dfm[name] > high) | (dfm[name] < low)]
     print(f"{name}: total {len(dfm)} vs left {len(nf)}")
+
+print("rolling average test:")
+
+st = dfs.rolling(100).mean()
+fig = plotly.plot(st, "line")
+fig.show()
