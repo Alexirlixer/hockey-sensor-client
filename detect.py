@@ -126,5 +126,5 @@ class shot_detect:
             self._last_peak_timestamp = w[m, POS_TS]
 
             s = mph(w, m, self._size/1000)
-            print(f"[ts:{w[m,POS_TS]}]  [acc: {w[m,POS_ACC]:.2f}] [mph: {s:.2f}] [{shot_type(pred)}]")
+            print(f"[{self._count}] [at:{w[m,POS_TS]}] [acc: {w[m,POS_ACC]:.2f}] [mph: {s:.2f}] [{shot_type(pred)}]")
 
