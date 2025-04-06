@@ -1,6 +1,7 @@
 import asyncio
 import struct
-import duckdb
+import csv
+import numpy as np 
 
 from bleak import BleakScanner, BleakClient, BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
@@ -8,31 +9,25 @@ from bleak.backends.scanner import AdvertisementData
 
 SENSOR_SERVICE_UUID = "0000beef-0000-1000-8000-00805f9b34fb"
 SENSOR_CHARACTERISTIC_UUID = '0000beef-0000-1000-8000-00805f9b34fb'
-SENSOR_DATA_DB = "sensor.db"
 
-_SENSOR_DATA_TABLE = """
-    create table if not exists measurements(
-        clock bigint, 
-        gx    float4, 
-        gy    float4,
-        gz    float4,
-        ax    float4, 
-        ay    float4,
-        az    float4,
-    )
-"""
-_SENSOR_DATA_INSERT = "insert into measurements values(?,?,?,?,?,?,?)"
-_SENSOR_DATA_COUNT = "select count(*) from measurements"
-
-
-async def sensor_connect(dev: BLEDevice, db: duckdb.DuckDBPyConnection, done: asyncio.Event):
+async def sensor_connect(dev: BLEDevice, done: asyncio.Event):
+    f = open("data.csv", mode ="w")
+    writer = csv.writer(f)
+    
     def disconnected(c: BleakClient):
         print('disconnected from ', c.address)
         done.set()
 
     def on_data(c: BleakGATTCharacteristic, data: bytearray):
         m = struct.unpack("<Qffffff", data)
-        db.execute(_SENSOR_DATA_INSERT, list(m))
+
+        # read measurements 
+        data = list(m)
+        ts, gyro, lin_acc = data[0], data[1:4], data[4:7]
+
+        writer.writerow(data)
+        print('ts: %s, gyro: %s, lin acc: %s' % (ts, gyro, lin_acc))
+                  
         # ts, gx, gy, gz, ax, ay, az = m
         # print('{} ->  ({}, {}, {}) ({}, {}, {})'.format(*m))
         # print('Gyro  x {:5.0f} y {:5.0f} z {:5.0f}'.format(gx, gy, gz))
@@ -46,12 +41,7 @@ async def sensor_connect(dev: BLEDevice, db: duckdb.DuckDBPyConnection, done: as
         print('waiting on disconnect')
         await done.wait()
 
-
-async def check_measurements(db: duckdb.DuckDBPyConnection):
-    while True:
-        m = db.execute(_SENSOR_DATA_COUNT).fetchone()
-        print("measurement count: {}".format(*m))
-        await asyncio.sleep(10)
+    f.close()
 
 
 def is_sensor_device(d: BLEDevice, a: AdvertisementData):
@@ -59,20 +49,15 @@ def is_sensor_device(d: BLEDevice, a: AdvertisementData):
 
 
 async def main():
-    # open db
-    with duckdb.connect(SENSOR_DATA_DB) as db:
-        db.execute(_SENSOR_DATA_TABLE)
-        scanner = BleakScanner()
+    scanner = BleakScanner()
 
-        asyncio.create_task(check_measurements(db))
-
-        while True:
-            dev = await scanner.find_device_by_filter(is_sensor_device)
-            if dev:
-                done = asyncio.Event()
-                await sensor_connect(dev, db, done)
-                await done.wait()
-            await asyncio.sleep(10)
+    while True:
+        dev = await scanner.find_device_by_filter(is_sensor_device)
+        if dev:
+            done = asyncio.Event()
+            await sensor_connect(dev, done)
+            await done.wait()
+        await asyncio.sleep(10)
 
 
 asyncio.run(main())

@@ -1,6 +1,6 @@
 import asyncio
 import struct
-import csv
+from detect import *
 
 from bleak import BleakScanner, BleakClient, BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
@@ -9,10 +9,8 @@ from bleak.backends.scanner import AdvertisementData
 SENSOR_SERVICE_UUID = "0000beef-0000-1000-8000-00805f9b34fb"
 SENSOR_CHARACTERISTIC_UUID = '0000beef-0000-1000-8000-00805f9b34fb'
 
-
-async def sensor_connect(dev: BLEDevice, done: asyncio.Event):
-    f = open("data-test.csv", mode ="w")
-    writer = csv.writer(f)
+async def sensor_connect(dev: BLEDevice, done: asyncio.Event): 
+    detector = shot_detect()
 
     def disconnected(c: BleakClient):
         print('disconnected from ', c.address)
@@ -21,11 +19,15 @@ async def sensor_connect(dev: BLEDevice, done: asyncio.Event):
     def on_data(c: BleakGATTCharacteristic, data: bytearray):
         m = struct.unpack("<Qffffff", data)
 
+        # read measurements 
         data = list(m)
-        ts, gyro, lin_acc = data[0], data[1:4], data[4:7]
 
-        writer.writerow(data)
-        print('ts: %s, gyro: %s, lin acc: %s' % (ts, gyro, lin_acc))
+        # attempt shot detection 
+        detector.on_measurement(data)
+                  
+        # ts, gyro, lin_acc = data[0], data[1:4], data[4:7]
+        # print('ts: %s, gyro: %s, lin acc: %s' % (ts, gyro, lin_acc))
+
         # ts, gx, gy, gz, ax, ay, az = m
         # print('{} ->  ({}, {}, {}) ({}, {}, {})'.format(*m))
         # print('Gyro  x {:5.0f} y {:5.0f} z {:5.0f}'.format(gx, gy, gz))
@@ -38,10 +40,7 @@ async def sensor_connect(dev: BLEDevice, done: asyncio.Event):
         await client.start_notify(SENSOR_SERVICE_UUID, on_data)
         print('waiting on disconnect')
         await done.wait()
-
-    f.close()
-
-
+        
 
 def is_sensor_device(d: BLEDevice, a: AdvertisementData):
     return SENSOR_SERVICE_UUID in a.service_uuids
