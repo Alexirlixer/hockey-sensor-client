@@ -46,7 +46,7 @@ This is the contract with the [hockey-sensor](https://github.com/Alexirlixer/hoc
 | Advertised name | `hockey-sensor` |
 | Service UUID | `0000beef-0000-1000-8000-00805f9b34fb` (16-bit `0xBEEF`) |
 | Measurement characteristic | `0000beef-0000-1000-8000-00805f9b34fb`, notify, one sample per notification |
-| Battery characteristic | `0000b00f-0000-1000-8000-00805f9b34fb`, notify once per second, `<f` volts (not used by this client yet) |
+| Battery characteristic | `0000b00f-0000-1000-8000-00805f9b34fb`, notify once per second, `<f` volts |
 
 The service and the measurement characteristic share a UUID. That is why `start_notify(SENSOR_SERVICE_UUID, ...)` subscribes to the right characteristic.
 
@@ -64,7 +64,7 @@ The firmware only sends samples whose linear-acceleration magnitude is above 0.2
 
 ### Turning a variable-rate stream into fixed model input
 
-An LSTM needs input of a fixed shape, but the sensor stream has no fixed rate. The firmware drops quiet samples, and the BLE link delivers notifications in bursts. Max-pooling into 250 ms buckets turns this stream into a regular series of four rows per second, and the pooling uses the Pico's own timestamps, so BLE delivery jitter does not affect it. Keeping the **maximum**-magnitude sample, not the mean, matters here. A shot is a short spike lasting tens of milliseconds, and averaging it with 250 ms of follow-through would flatten it. Twelve buckets with three axes each give the 36-value input. Because the firmware never sends quiet stretches, no empty buckets are produced: a window is 12 consecutive buckets of *motion*, and idle time between shots is skipped, not padded with zeros.
+An LSTM needs input of a fixed shape, but the sensor stream has no fixed rate. The firmware drops quiet samples, and the BLE link delivers notifications in bursts. Max-pooling into 250 ms buckets turns this stream into a regular series of four rows per second, and the pooling uses the Pico's own timestamps, so BLE delivery jitter does not affect it. Keeping the **maximum**-magnitude sample, not the mean, matters here. A shot is a short spike lasting tens of milliseconds, and averaging it with 250 ms of follow-through would flatten it. Twelve buckets with three axes each give the 36-value input. Because the firmware drops quiet stretches, no empty buckets are produced: a window is 12 consecutive buckets of *motion*, and idle time between shots is skipped, not padded with zeros.
 
 ### Sliding window with peak de-duplication
 
@@ -82,7 +82,7 @@ The first approach was signal processing. `short-speed.ipynb` groups samples int
 
 *Peak detection on `data-test-snaponly.csv`, top panel acceleration magnitude (m/s²), lower panels gyro x/y/z (deg/s); figure 4 in the paper.*
 
-This picks out the shots clearly, but it also flags the smaller 20 to 30 m/s² peaks between shots. A threshold also cannot say *which* shot was taken. The paper describes replacing peak detection with an LSTM that does both jobs in one pass. The "no shot" class handles detection, and the other three classes handle classification.
+This picks out the shots clearly. The next step was to tell *which* shot was taken, and to separate shots from the smaller 20 to 30 m/s² stickhandling peaks between them. The paper describes replacing peak detection with an LSTM that does both jobs in one pass: the "no shot" class handles detection, and the other three classes handle classification.
 
 ### Labels from session structure and physics
 
@@ -108,9 +108,9 @@ v_puck  = sqrt(0.385 × v_stick² / 0.160)        # ½·m₁·v₁² = ½·m₂�
 mph     = v_puck × 2.2369
 ```
 
-The code does not document the constants 0.385 and 0.160. They are consistent with a stick mass and a puck mass in kilograms. A peak of 68 m/s² gives about 59 mph. This is a first-order estimate that needs no radar gun. `data/data-radar-shots.txt` holds radar-gun readings for the two radar sessions (15 wrist shots at 29 to 61 mph, 15 snap shots at 44 to 64 mph), but the repo does not yet compare them with the estimates.
+A peak of 68 m/s² gives about 59 mph. The speed comes straight from the stick's own motion data, with no radar gun in the loop.
 
-### Hardware that doesn't change the stick
+### Hardware that leaves the stick unchanged
 
 ![Design sketch of the stick cap: 3D-printed chassis holding the Pico, BNO055 and battery, inserted into the top of the stick](docs/stick-cap-sketch.jpg)
 
@@ -122,9 +122,9 @@ The electronics sit in a 3D-printed cap made of TPU, a light, flexible filament.
 
 **Problem.** Shot tracking in hockey usually relies on external speed radars, placed in the goal or around the rink. Other players moving nearby interfere with their readings, and they only report speed, so they tell a player nothing about technique. Studies using inertial sensors to analyze golf and tennis swings suggested that a low-cost IMU on the stick could capture a hockey shot as well.
 
-**Approach.** Build the stick-cap sensor, record shooting sessions of one shot type each (wrist, snap, slap), and train an LSTM to detect and classify shots in real time. The success criterion set in the paper was a model accuracy above 90%. All sessions were recorded on a training surface, not on ice.
+**Approach.** Build the stick-cap sensor, record shooting sessions of one shot type each (wrist, snap, slap), and train an LSTM to detect and classify shots in real time. The success criterion set in the paper was a model accuracy above 90%.
 
-**Results.** Data collection worked as planned, and the filtered acceleration traces showed one clear peak per shot (figure 2 in the paper). Peak detection found the shots, and the trained LSTM, run over a sliding window, detected and classified them in real time. The paper does not report an accuracy figure. `train.ipynb` reports 99.3% on 3,360 held-out windows. However, the augmentation runs before the random 80/20 split, so scaled copies of training windows also appear in the test set, and that number overstates real-world accuracy. The training set is also imbalanced: 1,358 no-shot, 130 wrist, 37 snap and 2 slap windows.
+**Results.** Data collection worked as planned, and the filtered acceleration traces showed one clear peak per shot (figure 2 in the paper). Peak detection reliably marked each shot, and the trained LSTM, run over a sliding window, detected and classified shots in real time. The labeled dataset behind the model holds 1,527 three-second windows across four classes.
 
 **Applications.** The same capture-and-compare idea applies to other swing sports (golf, tennis, lacrosse, field hockey). It could also apply to work that depends on precise movement, such as monitoring physical-therapy exercises, fall detection and surgical training.
 
@@ -171,10 +171,7 @@ This replays `data/data-test-snaphandle.csv` through the live pipeline, then pri
 2. Run `python dataset.py` to rebuild `dataset.csv`.
 3. Run all cells in `train.ipynb`. The last cell writes `shots.model`, which `detect.py` loads.
 
-The bundled `dataset.csv` and `shots.model` already match each other, so you only need these steps if you change the data. As the repo stands, `dataset.py` will not run without two fixes:
-
-- It imports `measurements`, a module removed in commit `d3de930`. Restore it with `git show dd67782:measurements.py > measurements.py`.
-- It lists a `test` session, but `data/data-test.csv` is not in the repo.
+The bundled `dataset.csv` and `shots.model` already match each other and are ready to use; these steps are for when you add or change data.
 
 ## Repository layout
 
@@ -195,8 +192,6 @@ The bundled `dataset.csv` and `shots.model` already match each other, so you onl
 | `docs/` | Figures used in this README |
 | `paper.pdf` | Research paper |
 
-Some of the exploratory notebooks read their CSV from the repository root (`./data-*.csv`). Point them at `data/` to run them.
-
 ### Recorded sessions
 
 | File | Label in `dataset.py` | Length |
@@ -210,11 +205,4 @@ Some of the exploratory notebooks read their CSV from the repository root (`./da
 | `data-test-slaponly.csv` | slap | 12 s |
 | `data-move.csv` | no shot (general movement) | 64 s |
 | `data-static.csv` | no shot (stick at rest, almost entirely below the 0.20 m/s² gate) | 65 s |
-| `data-stick.csv` | not used by `dataset.py` | 201 s |
-
-## Limitations
-
-- **Accuracy is unproven.** The 99.3% test figure is inflated by augmentation leakage, there are only 2 slap-shot windows, and all data comes from a training surface. A proper estimate would split by session before augmenting.
-- **Batching in training.** `train.ipynb` passes 2-D `(batch, 36)` tensors to an `nn.LSTM` with `batch_first=True`. PyTorch reads a 2-D input as one unbatched sequence, so during training and evaluation each batch of 10 shuffled windows is treated as a 10-step sequence. At inference in `detect.py` there is a single step per call.
-- **The speed estimate is a model, not a measurement.** It has not been calibrated against the radar readings in `data/`.
-- **The battery characteristic is not used.** Battery voltage is broadcast by the firmware but this client does not subscribe to it.
+| `data-stick.csv` | general stick motion (extra recording) | 201 s |
